@@ -1,0 +1,8 @@
+*.out
+*.o
+*.o.*
+*.ko
+*.ko.*
+.tmp*
+*.symvers
+*.mod.c

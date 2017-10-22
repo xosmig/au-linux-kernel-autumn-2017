@@ -4,6 +4,8 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
+#include <linux/proc_fs.h>
+#include <linux/sched/signal.h>
 
 #include "stack.h"
 #include "assert.h"
@@ -45,8 +47,34 @@ static int __init test_stack(void)
 
 static int __init print_processes_backwards(void)
 {
-    // TODO
-    return -ENODEV;
+    int error_code = 0;
+    struct task_struct* iter;
+    LIST_HEAD(stack);
+
+    for_each_process(iter) {
+        char *comm = kmalloc(sizeof(char) * TASK_COMM_LEN, GFP_KERNEL);
+        stack_entry_t *new = create_stack_entry(comm);
+        if (!comm || !new) {
+            error_code = -ENOMEM;
+            kfree(comm);
+            kfree(new);
+            break;
+        }
+
+        get_task_comm(comm, iter);
+        stack_push(&stack, new);
+    }
+
+    while (!stack_empty(&stack)) {
+        stack_entry_t *tos = stack_pop(&stack);
+        char *comm = STACK_ENTRY_DATA(tos, char*);
+        if (!error_code) {
+          printk(KERN_ALERT "%s", comm);
+        }
+        delete_stack_entry(tos);
+        kfree(comm);
+    }
+    return error_code;
 }
 
 static int __init ll_init(void)
