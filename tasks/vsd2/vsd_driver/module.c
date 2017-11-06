@@ -46,7 +46,7 @@ static ssize_t vsd_dev_read(struct file *filp,
 
     if (copy_to_user(read_user_buf, vsd_dev->vbuf + *fpos, read_size))
         return -EFAULT;
- 
+
     *fpos += read_size;
     return read_size;
 }
@@ -144,7 +144,7 @@ static int map_vmalloc_range(struct vm_area_struct *uvma, void *kaddr, size_t si
             || !PAGE_ALIGNED(size))
         return -EINVAL;
 
-    /*  
+    /*
      * Remember that all the work with memory is done using pages.
      * PAGE_SIZE is minimal size of memory we can map/unmap
      * anywhere.
