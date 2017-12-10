@@ -209,7 +209,11 @@ static int map_vmalloc_range(struct vm_area_struct *uvma, void *kaddr, size_t si
         return -EINVAL;
 
     for (offset = 0; offset < size; offset += PAGE_SIZE) {
-        if ((ret = vm_insert_page(uvma, uaddr + offset, vmalloc_to_page(kaddr + offset)))) {
+        struct page *page = vmalloc_to_page(kaddr + offset);
+        if (!page) {
+            return -EFAULT;
+        }
+        if ((ret = vm_insert_page(uvma, uaddr + offset, page))) {
             return ret;
         }
     }
