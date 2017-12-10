@@ -21,9 +21,19 @@ typedef struct vsd_dev {
     size_t buf_size;
     size_t max_buf_size;
     atomic64_t refcnt;
-    spinlock_t size_lock;
+    rwlock_t size_lock;
 } vsd_dev_t;
 static vsd_dev_t *vsd_dev;
+
+#define RUN_SIZE_LOCKED(ret_type, func, ...) \
+    do { \
+        ret_type ret; \
+        read_lock(&vsd_dev->size_lock); \
+        ret = func(__VA_ARGS__); \
+        read_unlock(&vsd_dev->size_lock); \
+        return ret; \
+    } while (0)
+
 
 static int vsd_dev_open(struct inode *inode, struct file *filp)
 {
@@ -37,7 +47,7 @@ static int vsd_dev_release(struct inode *inode, struct file *filp)
     return 0;
 }
 
-static ssize_t vsd_dev_read(struct file *filp,
+static ssize_t vsd_dev_read_impl(struct file *filp,
     char __user *read_user_buf, size_t read_size, loff_t *fpos)
 {
     if (*fpos >= vsd_dev->buf_size)
@@ -53,7 +63,13 @@ static ssize_t vsd_dev_read(struct file *filp,
     return read_size;
 }
 
-static ssize_t vsd_dev_write(struct file *filp,
+static ssize_t vsd_dev_read(struct file *filp,
+    char __user *read_user_buf, size_t read_size, loff_t *fpos)
+{
+    RUN_SIZE_LOCKED(ssize_t, vsd_dev_read_impl, filp, read_user_buf, read_size, fpos);
+}
+
+static ssize_t vsd_dev_write_impl(struct file *filp,
     const char __user *write_user_data, size_t write_size, loff_t *fpos)
 {
     if (*fpos >= vsd_dev->buf_size)
@@ -69,7 +85,13 @@ static ssize_t vsd_dev_write(struct file *filp,
     return write_size;
 }
 
-static loff_t vsd_dev_llseek(struct file *filp, loff_t off, int whence)
+static ssize_t vsd_dev_write(struct file *filp,
+    const char __user *write_user_data, size_t write_size, loff_t *fpos)
+{
+    RUN_SIZE_LOCKED(ssize_t, vsd_dev_write_impl, filp, write_user_data, write_size, fpos);
+}
+
+static loff_t vsd_dev_llseek_impl(struct file *filp, loff_t off, int whence)
 {
     loff_t newpos = 0;
 
@@ -94,7 +116,12 @@ static loff_t vsd_dev_llseek(struct file *filp, loff_t off, int whence)
     return newpos;
 }
 
-static long vsd_ioctl_get_size(vsd_ioctl_get_size_arg_t __user *uarg)
+static loff_t vsd_dev_llseek(struct file *filp, loff_t off, int whence)
+{
+    RUN_SIZE_LOCKED(loff_t, vsd_dev_llseek_impl, filp, off, whence);
+}
+
+static long vsd_ioctl_get_size_impl(vsd_ioctl_get_size_arg_t __user *uarg)
 {
     vsd_ioctl_get_size_arg_t arg;
     if (copy_from_user(&arg, uarg, sizeof(arg)))
@@ -107,13 +134,20 @@ static long vsd_ioctl_get_size(vsd_ioctl_get_size_arg_t __user *uarg)
     return 0;
 }
 
+static long vsd_ioctl_get_size(vsd_ioctl_get_size_arg_t __user *uarg)
+{
+    RUN_SIZE_LOCKED(long, vsd_ioctl_get_size_impl, uarg);
+}
+
 static long vsd_ioctl_set_size(vsd_ioctl_set_size_arg_t __user *uarg)
 {
     int ret = 0;
     vsd_ioctl_set_size_arg_t arg;
 
-    spin_lock(&vsd_dev->size_lock);
+    write_lock(&vsd_dev->size_lock);
 
+    // This check should be under a lock so that no new mappings might occur
+    // between this check and actual changing of the size
     if (atomic64_read(&vsd_dev->refcnt) > 0) {
         ret = -EBUSY;
         goto end;
@@ -132,7 +166,7 @@ static long vsd_ioctl_set_size(vsd_ioctl_set_size_arg_t __user *uarg)
     vsd_dev->buf_size = arg.size;
 
 end:
-    spin_unlock(&vsd_dev->size_lock);
+    write_unlock(&vsd_dev->size_lock);
     return ret;
 }
 
@@ -153,12 +187,10 @@ static long vsd_dev_ioctl(struct file *filp, unsigned int cmd,
 
 static void vsd_dev_vma_open(struct vm_area_struct *uvma) {
     atomic64_inc(&vsd_dev->refcnt);
-    pr_notice(LOG_TAG "VMA opened, refcnt: %ld\n", atomic64_read(&vsd_dev->refcnt));
 }
 
 static void vsd_dev_vma_close(struct vm_area_struct *uvma) {
     atomic64_dec(&vsd_dev->refcnt);
-    pr_notice(LOG_TAG "VMA closed, refcnt: %ld\n", atomic64_read(&vsd_dev->refcnt));
 }
 
 static struct vm_operations_struct vsd_dev_vma_ops = {
@@ -186,38 +218,37 @@ static int map_vmalloc_range(struct vm_area_struct *uvma, void *kaddr, size_t si
     return 0;
 }
 
-static int vsd_dev_mmap(struct file *filp, struct vm_area_struct *vma)
+static int vsd_dev_mmap_impl(struct file *filp, struct vm_area_struct *vma)
 {
-    int ret = 0;
+    int ret;
     unsigned long offset, size;
-
-    spin_lock(&vsd_dev->size_lock);
 
     size = PAGE_ALIGN(vma->vm_end - vma->vm_start);
     offset = vma->vm_pgoff << PAGE_SHIFT;
 
     if ((offset + size) > vsd_dev->buf_size) {
-        ret = -EINVAL;
-        goto end;
+        return -EINVAL;
     }
 
     if (!(vma->vm_flags & VM_SHARED)) {
-        ret = -EINVAL;
-        goto end;
+        return -EINVAL;
     }
 
     if ((ret = map_vmalloc_range(vma, vsd_dev->vbuf + offset, size))) {
-        goto end;
+        return ret;
     }
 
     vma->vm_ops = &vsd_dev_vma_ops;
     // this method isn't called automatically
-    // see: LDD3 chapter 15.
+    // see: LDD3, chapter 15.
     vsd_dev_vma_open(vma);
 
-end:
-    spin_unlock(&vsd_dev->size_lock);
-    return ret;
+    return 0;
+}
+
+static int vsd_dev_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+    RUN_SIZE_LOCKED(int, vsd_dev_mmap_impl, filp, vma);
 }
 
 static struct file_operations vsd_dev_fops = {
@@ -267,7 +298,7 @@ static int vsd_driver_probe(struct platform_device *pdev)
     vsd_dev->buf_size = vsd_dev->max_buf_size;
 
     atomic64_set(&vsd_dev->refcnt, 0);
-    vsd_dev->size_lock = __SPIN_LOCK_UNLOCKED(vsd_dev->size_lock);
+    vsd_dev->size_lock = __RW_LOCK_UNLOCKED(vsd_dev->size_lock);
 
     pr_notice(LOG_TAG "VSD dev with MINOR %u"
         " has started successfully\n", vsd_dev->mdev.minor);
