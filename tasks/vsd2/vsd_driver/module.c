@@ -20,6 +20,8 @@ typedef struct vsd_dev {
     char *vbuf;
     size_t buf_size;
     size_t max_buf_size;
+    atomic64_t refcnt;
+    spinlock_t size_lock;
 } vsd_dev_t;
 static vsd_dev_t *vsd_dev;
 
@@ -107,17 +109,31 @@ static long vsd_ioctl_get_size(vsd_ioctl_get_size_arg_t __user *uarg)
 
 static long vsd_ioctl_set_size(vsd_ioctl_set_size_arg_t __user *uarg)
 {
+    int ret = 0;
     vsd_ioctl_set_size_arg_t arg;
-    if (0 /* TODO device is currently mapped */)
-        return -EBUSY;
 
-    if (copy_from_user(&arg, uarg, sizeof(arg)))
-        return -EFAULT;
+    spin_lock(&vsd_dev->size_lock);
 
-    if (arg.size <= vsd_dev->max_buf_size) {
-        vsd_dev->buf_size = arg.size;
-        return 0;
-    } else return -ENOMEM;
+    if (atomic64_read(&vsd_dev->refcnt) > 0) {
+        ret = -EBUSY;
+        goto end;
+    }
+
+    if (copy_from_user(&arg, uarg, sizeof(arg))) {
+        ret = -EFAULT;
+        goto end;
+    }
+
+    if (arg.size > vsd_dev->max_buf_size) {
+        ret = -ENOMEM;
+        goto end;
+    }
+
+    vsd_dev->buf_size = arg.size;
+
+end:
+    spin_unlock(&vsd_dev->size_lock);
+    return ret;
 }
 
 static long vsd_dev_ioctl(struct file *filp, unsigned int cmd,
@@ -135,24 +151,36 @@ static long vsd_dev_ioctl(struct file *filp, unsigned int cmd,
     }
 }
 
-static struct vm_operations_struct vsd_dev_vma_ops = {};
+static void vsd_dev_vma_open(struct vm_area_struct *uvma) {
+    atomic64_inc(&vsd_dev->refcnt);
+    pr_notice(LOG_TAG "VMA opened, refcnt: %ld\n", atomic64_read(&vsd_dev->refcnt));
+}
+
+static void vsd_dev_vma_close(struct vm_area_struct *uvma) {
+    atomic64_dec(&vsd_dev->refcnt);
+    pr_notice(LOG_TAG "VMA closed, refcnt: %ld\n", atomic64_read(&vsd_dev->refcnt));
+}
+
+static struct vm_operations_struct vsd_dev_vma_ops = {
+    .open = vsd_dev_vma_open,
+    .close = vsd_dev_vma_close
+};
 
 static int map_vmalloc_range(struct vm_area_struct *uvma, void *kaddr, size_t size)
 {
+    int ret = 0;
+    loff_t offset;
+
     unsigned long uaddr = uvma->vm_start;
     if (!PAGE_ALIGNED(uaddr) || !PAGE_ALIGNED(kaddr)
             || !PAGE_ALIGNED(size))
         return -EINVAL;
 
-    /*
-     * Remember that all the work with memory is done using pages.
-     * PAGE_SIZE is minimal size of memory we can map/unmap
-     * anywhere.
-     * Note that vmalloced VSD address range is not physically
-     * continuous. So we need to map each vmalloced page separetely.
-     * Use vmalloc_to_page and vm_insert_page functions for this.
-     */
-    // TODO
+    for (offset = 0; offset < size; offset += PAGE_SIZE) {
+        if ((ret = vm_insert_page(uvma, uaddr + offset, vmalloc_to_page(kaddr + offset)))) {
+            return ret;
+        }
+    }
 
     uvma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
     return 0;
@@ -163,21 +191,33 @@ static int vsd_dev_mmap(struct file *filp, struct vm_area_struct *vma)
     int ret = 0;
     unsigned long offset, size;
 
+    spin_lock(&vsd_dev->size_lock);
+
     size = PAGE_ALIGN(vma->vm_end - vma->vm_start);
     offset = vma->vm_pgoff << PAGE_SHIFT;
 
-    if ((offset + size) > vsd_dev->buf_size)
-       return -EINVAL;
+    if ((offset + size) > vsd_dev->buf_size) {
+        ret = -EINVAL;
+        goto end;
+    }
 
-    if (!(vma->vm_flags & VM_SHARED))
-        return -EINVAL;
+    if (!(vma->vm_flags & VM_SHARED)) {
+        ret = -EINVAL;
+        goto end;
+    }
 
-    if ((ret = map_vmalloc_range(vma, vsd_dev->vbuf + offset, size)))
-        return ret;
+    if ((ret = map_vmalloc_range(vma, vsd_dev->vbuf + offset, size))) {
+        goto end;
+    }
 
     vma->vm_ops = &vsd_dev_vma_ops;
+    // this method isn't called automatically
+    // see: LDD3 chapter 15.
+    vsd_dev_vma_open(vma);
 
-    return 0;
+end:
+    spin_unlock(&vsd_dev->size_lock);
+    return ret;
 }
 
 static struct file_operations vsd_dev_fops = {
@@ -187,7 +227,8 @@ static struct file_operations vsd_dev_fops = {
     .read = vsd_dev_read,
     .write = vsd_dev_write,
     .llseek = vsd_dev_llseek,
-    .unlocked_ioctl = vsd_dev_ioctl
+    .unlocked_ioctl = vsd_dev_ioctl,
+    .mmap = vsd_dev_mmap
 };
 
 #undef LOG_TAG
@@ -224,6 +265,9 @@ static int vsd_driver_probe(struct platform_device *pdev)
     vsd_dev->vbuf = (char*)vsd_phy_mem_buf_res->start;
     vsd_dev->max_buf_size = resource_size(vsd_phy_mem_buf_res);
     vsd_dev->buf_size = vsd_dev->max_buf_size;
+
+    atomic64_set(&vsd_dev->refcnt, 0);
+    vsd_dev->size_lock = __SPIN_LOCK_UNLOCKED(vsd_dev->size_lock);
 
     pr_notice(LOG_TAG "VSD dev with MINOR %u"
         " has started successfully\n", vsd_dev->mdev.minor);
