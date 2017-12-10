@@ -1,13 +1,17 @@
+<<<<<<< HEAD
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include "../vsd_driver/vsd_ioctl.h"
 
+=======
+>>>>>>> upstream/master
 /*
  * TODO parse command line arguments and call proper
  * VSD_IOCTL_* using C function 'ioctl' (see man ioctl).
  */
+<<<<<<< HEAD
 static const char *dev_file = "/dev/vsd";
 
 static const char *usage =
@@ -124,5 +128,8 @@ int cli(int argc, char **argv)
 int main(int argc, char **argv)
 {
     cli(argc - 1, argv + 1);
+=======
+int main(int argc, char **argv) {
+>>>>>>> upstream/master
     return 0;
 }

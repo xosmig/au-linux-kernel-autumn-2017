@@ -35,6 +35,7 @@ static int vsd_dev_release(struct inode *inode, struct file *filp)
 static ssize_t vsd_dev_read(struct file *filp,
     char __user *read_user_buf, size_t read_size, loff_t *fpos)
 {
+<<<<<<< HEAD
     if (*fpos >= vsd_dev->buf_size)
         return 0;
 
@@ -46,6 +47,13 @@ static ssize_t vsd_dev_read(struct file *filp,
 
     *fpos += read_size;
     return read_size;
+=======
+    // TODO copy VSD data from *fpos to *fpos + read_size
+    // to read_user_buf. Advance *fpos (current r/w position of opened file).
+    // Handle all errors. Return proper value that read syscall should return.
+    // See man 2 read, Linux device drivers 3 book (char devices chanpter).
+    return 0;
+>>>>>>> upstream/master
 }
 
 static ssize_t vsd_dev_write(struct file *filp,
@@ -91,11 +99,16 @@ static loff_t vsd_dev_llseek(struct file *filp, loff_t off, int whence)
 
 static long vsd_ioctl_get_size(vsd_ioctl_get_size_arg_t __user *uarg)
 {
+<<<<<<< HEAD
     vsd_ioctl_get_size_arg_t arg = {
         .size = vsd_dev->buf_size
     };
     if (copy_to_user(uarg, &arg, sizeof(arg)))
         return -EFAULT;
+=======
+    //TODO return vsd_dev->buf_size in uarg
+    // set proper return value
+>>>>>>> upstream/master
     return 0;
 }
 
@@ -111,6 +124,7 @@ static long vsd_ioctl_set_size(vsd_ioctl_set_size_arg_t __user *uarg)
     } else return -ENOMEM;
 }
 
+<<<<<<< HEAD
 static long vsd_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     switch (cmd) {
@@ -123,14 +137,25 @@ static long vsd_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     }
 }
 
+=======
+>>>>>>> upstream/master
 static struct file_operations vsd_dev_fops = {
     .owner = THIS_MODULE,
     .open = vsd_dev_open,
     .release = vsd_dev_release,
+<<<<<<< HEAD
     .read = vsd_dev_read,
     .write = vsd_dev_write,
     .llseek = vsd_dev_llseek,
     .unlocked_ioctl = vsd_dev_ioctl
+=======
+    // TODO to export all the VSD functionality to userspace
+    // set proper pointers to functions here.
+    .read = NULL,
+    .write = NULL,
+    .llseek = NULL,
+    .unlocked_ioctl = NULL
+>>>>>>> upstream/master
 };
 
 #undef LOG_TAG
@@ -142,7 +167,12 @@ static int vsd_driver_probe(struct platform_device *pdev)
     struct resource *vsd_phy_mem_buf_res = NULL;
     pr_notice(LOG_TAG "probing for device %s\n", pdev->name);
 
+<<<<<<< HEAD
     vsd_dev = (vsd_dev_t*)devm_kzalloc(&pdev->dev, sizeof(*vsd_dev), GFP_KERNEL);
+=======
+    //TODO alloc memory for driver here
+    vsd_dev = (vsd_dev_t*)NULL;
+>>>>>>> upstream/master
     if (!vsd_dev) {
         ret = -ENOMEM;
         pr_warn(LOG_TAG "Can't allocate memory\n");
@@ -150,6 +180,7 @@ static int vsd_driver_probe(struct platform_device *pdev)
     }
     vsd_dev->mdev.minor = MISC_DYNAMIC_MINOR;
     vsd_dev->mdev.name = "vsd";
+<<<<<<< HEAD
     vsd_dev->mdev.fops = &vsd_dev_fops;
     vsd_dev->mdev.mode = S_IRUSR | S_IRGRP | S_IROTH
         | S_IWUSR| S_IWGRP | S_IWOTH;
@@ -157,6 +188,16 @@ static int vsd_driver_probe(struct platform_device *pdev)
     if ((ret = misc_register(&vsd_dev->mdev))) {
         goto error_misc_reg;
     }
+=======
+    // TODO set pointer to valid file_operations that exports
+    // VSD functionality to userspace
+    vsd_dev->mdev.fops = NULL;
+    vsd_dev->mdev.mode = S_IRUSR | S_IRGRP | S_IROTH
+        | S_IWUSR| S_IWGRP | S_IWOTH;
+
+    if ((ret = misc_register(&vsd_dev->mdev)))
+        goto error_misc_reg;
+>>>>>>> upstream/master
 
     vsd_phy_mem_buf_res =
         platform_get_resource_byname(pdev, IORESOURCE_MEM, "buffer");
@@ -165,7 +206,13 @@ static int vsd_driver_probe(struct platform_device *pdev)
         goto error_get_buf;
     }
     vsd_dev->vbuf = phys_to_virt(vsd_phy_mem_buf_res->start);
+<<<<<<< HEAD
     vsd_dev->buf_size = resource_size(vsd_phy_mem_buf_res);
+=======
+    //TODO compute VSD buffer size using information from
+    // abstract memory resource vsd_phy_mem_buf_res
+    vsd_dev->buf_size = 0;
+>>>>>>> upstream/master
 
     pr_notice(LOG_TAG "VSD dev with MINOR %u"
         " has started successfully\n", vsd_dev->mdev.minor);
@@ -174,9 +221,14 @@ static int vsd_driver_probe(struct platform_device *pdev)
 error_get_buf:
     misc_deregister(&vsd_dev->mdev);
 error_misc_reg:
+<<<<<<< HEAD
     // The memory will be automatically freed (I hope)
     // kfree(vsd_dev);
     // vsd_dev = NULL;
+=======
+    kfree(vsd_dev);
+    vsd_dev = NULL;
+>>>>>>> upstream/master
 error_alloc:
     return ret;
 }
@@ -184,10 +236,16 @@ error_alloc:
 static int vsd_driver_remove(struct platform_device *dev)
 {
     pr_notice(LOG_TAG "removing device %s\n", dev->name);
+<<<<<<< HEAD
     misc_deregister(&vsd_dev->mdev);
     // The memory will be automatically freed (I hope)
     // kfree(vsd_dev);
     // vsd_dev = NULL;
+=======
+    //TODO vsd_driver module is unloaded here.
+    // so we need to unregister and cleanup
+    // misc_device owned by vsd_driver module
+>>>>>>> upstream/master
     return 0;
 }
 
@@ -195,14 +253,29 @@ static struct platform_driver vsd_driver = {
     .probe = vsd_driver_probe,
     .remove = vsd_driver_remove,
     .driver = {
+<<<<<<< HEAD
         .name = "au-vsd",
+=======
+        //TODO set platform_driver name here.
+        // platform_bus matches its devices and drivers using
+        // driver name and device name. platform_bus calls driver probe method
+        // when it finds driver with the same name as new device name.
+        .name = "",
+>>>>>>> upstream/master
         .owner = THIS_MODULE,
     }
 };
 
 static int __init vsd_driver_init(void)
 {
+<<<<<<< HEAD
     return platform_driver_register(&vsd_driver);
+=======
+    //TODO use platform_driver_register to notify platform_bus
+    // that we have platform_driver (vsd_driver).
+    // Also set proper return code.
+    return -EINVAL;
+>>>>>>> upstream/master
 }
 
 static void __exit vsd_driver_exit(void)
