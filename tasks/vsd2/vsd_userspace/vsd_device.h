@@ -4,9 +4,6 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
-#define VSD_DEV_DOUBLE_INIT 5
-#define VSD_DEV_NOT_INIT 6
-
 /*
  * returns:
  *  <>0 on failure
