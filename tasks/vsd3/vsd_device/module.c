@@ -20,8 +20,8 @@
 
 #define LOG_TAG "[VSD_PLAT_DEVICE] "
 
-static unsigned long buf_size = 2 * PAGE_SIZE;
-module_param(buf_size, ulong, S_IRUGO);
+static unsigned long max_buf_size = 2 * PAGE_SIZE;
+module_param(max_buf_size, ulong, S_IRUGO);
 
 typedef struct vsd_plat_device {
     struct platform_device pdev;
@@ -55,25 +55,39 @@ static vsd_plat_device_t dev = {
 };
 
 static ssize_t vsd_dev_read(char *dst, size_t dst_size, size_t offset) {
-    (void)dst;
-    (void)dst_size;
-    (void)offset;
-    // TODO
-    return -EINVAL;
+    if (offset >= dev.buf_size) {
+        return 0;
+    }
+
+    if (dst_size > dev.buf_size - offset) {
+        dst_size = dev.buf_size - offset;
+    }
+
+    memcpy(dst, dev.vbuf + offset, dst_size);
+    return dst_size;
 }
 
 static ssize_t vsd_dev_write(char *src, size_t src_size, size_t offset) {
-    (void)src;
-    (void)src_size;
-    (void)offset;
-    // TODO
-    return -EINVAL;
+    if (offset >= dev.buf_size) {
+        return -EINVAL;
+    }
+
+    if (src_size > dev.buf_size - offset) {
+        src_size = dev.buf_size - offset;
+    }
+
+    memcpy(dev.vbuf + offset, src, src_size);
+    return src_size;
 }
 
-static void vsd_dev_set_size(size_t size)
+static ssize_t vsd_dev_set_size(size_t size)
 {
-    (void)size;
-    // TODO
+    if (size > max_buf_size) {
+        return -ENOMEM;
+    }
+    dev.buf_size = size;
+    dev.hwregs->dev_size = size;
+    return 0;
 }
 
 static int vsd_dev_cmd_poll_kthread_func(void *data)
@@ -82,26 +96,44 @@ static int vsd_dev_cmd_poll_kthread_func(void *data)
     while(!kthread_should_stop()) {
         mb();
         switch(dev.hwregs->cmd) {
+            case VSD_CMD_NONE:
+                goto no_cmd;
             case VSD_CMD_READ:
                 ret = vsd_dev_read(
                         phys_to_virt((phys_addr_t)dev.hwregs->dma_paddr),
                         (size_t)dev.hwregs->dma_size,
                         (size_t)dev.hwregs->dev_offset
                 );
-                break;
+                goto was_cmd;
             case VSD_CMD_WRITE:
                 ret = vsd_dev_write(
                         phys_to_virt((phys_addr_t)dev.hwregs->dma_paddr),
                         (size_t)dev.hwregs->dma_size,
                         (size_t)dev.hwregs->dev_offset
                 );
-                break;
+                goto was_cmd;
             case VSD_CMD_SET_SIZE:
-                vsd_dev_set_size((size_t)dev.hwregs->dev_offset);
-                break;
+                ret = vsd_dev_set_size((size_t)dev.hwregs->dev_offset);
+                goto was_cmd;
+            default:
+                ret = -EINVAL;
+                goto was_cmd;
         }
 
-        // TODO notify vsd_driver about finished cmd
+        was_cmd:
+        dev.hwregs->cmd = VSD_CMD_NONE;
+        if (ret < 0) {
+            dev.hwregs->result = ret;
+            dev.hwregs->dma_size = 0;
+        } else {
+            dev.hwregs->result = 0;
+            dev.hwregs->dma_size = ret;
+        }
+        wmb();
+
+        tasklet_schedule((struct tasklet_struct*)dev.hwregs->tasklet_vaddr);
+
+        no_cmd:
         // Sleep one sec not to waste CPU on polling
         ssleep(1);
     }
@@ -120,7 +152,7 @@ static int __init vsd_dev_module_init(void)
         goto error_alloc_hw;
     }
 
-    dev.vbuf = (char*)vzalloc(buf_size);
+    dev.vbuf = (char*)vzalloc(max_buf_size);
     if (!dev.vbuf) {
         ret = -ENOMEM;
         pr_warn(LOG_TAG "Can't allocate memory\n");
@@ -132,7 +164,7 @@ static int __init vsd_dev_module_init(void)
         goto error_thread;
     }
 
-    dev.buf_size = buf_size;
+    dev.buf_size = max_buf_size;
     dev.hwregs->cmd = VSD_CMD_NONE;
     dev.hwregs->dev_size = dev.buf_size;
     dev.pdev.resource[VSD_RES_REGS_IX].start =
