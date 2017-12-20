@@ -24,6 +24,11 @@ static inline int shared_spin_islocked(shared_spinlock_t *lock)
     return __sync_bool_compare_and_swap(&lock->value, 1, 1);
 }
 
+static inline int shared_spin_trylock_once(shared_spinlock_t *lock)
+{
+    return __sync_bool_compare_and_swap(&lock->value, 0, 1);
+}
+
 static inline int shared_spin_trylock(shared_spinlock_t *lock)
 {
     size_t tried = 0;

@@ -3,15 +3,19 @@
 #include <sys/types.h>
 #include <shared_spinlock.h>
 #include <mutex_ioctl.h>
+#include <stdatomic.h>
 
 typedef struct mutex {
-    // TODO store userspace side mutex state here
+    shared_spinlock_t spinlock;
+    mutex_id_t id;
+    atomic_long sleep_cnt;
 } mutex_t;
 
 // Return codes
 typedef enum {
     MUTEX_OK = 0,
-    MUTEX_INTERNAL_ERR = 1
+    MUTEX_INTERNAL_ERR = 1,
+    MUTEX_DOUBLE_INIT = 2
 } mutex_err_t;
 
 mutex_err_t mutex_lib_init();
